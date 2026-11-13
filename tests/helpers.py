@@ -42,3 +42,52 @@ def make_text(
     if extra_layers:
         text.tag_layer(list(extra_layers))
     return text
+
+
+def find(raw: str, part: str, nth: int = 0) -> tuple[int, int]:
+    """Position of the `nth` occurrence (0-based) of `part` in `raw`."""
+    start = -1
+    for _ in range(nth + 1):
+        start = raw.index(part, start + 1)
+    return start, start + len(part)
+
+
+def add_relations(
+    text,
+    name: str,
+    span_names: list[str],
+    relations: list[dict],
+    attributes: tuple[str, ...] = (),
+    ambiguous: bool = False,
+):
+    """Add a RelationLayer to `text` and return it.
+
+    Each relation is a dict from span names to substrings (or `(substring, nth)`)
+    and from attribute names to values; for ambiguous layers an attribute value
+    may be a list, which gives one annotation per value.
+    """
+    from estnltk_core import RelationLayer
+
+    layer = RelationLayer(
+        name,
+        span_names=span_names,
+        attributes=attributes,
+        ambiguous=ambiguous,
+        text_object=text,
+    )
+    for relation in relations:
+        spans = {
+            k: find(text.text, *(v if isinstance(v, tuple) else (v,)))
+            for k, v in relation.items()
+            if k in span_names
+        }
+        values = {k: v for k, v in relation.items() if k in attributes}
+        lists = {k: v for k, v in values.items() if isinstance(v, list)}
+        first = {k: (v[0] if isinstance(v, list) else v) for k, v in values.items()}
+        layer.add_annotation({**spans, **first})
+        for j in range(1, max((len(v) for v in lists.values()), default=0)):
+            layer[-1].add_annotation(
+                {k: (v[j] if isinstance(v, list) else v) for k, v in values.items()}
+            )
+    text.add_layer(layer)
+    return layer

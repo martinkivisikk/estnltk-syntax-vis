@@ -21,6 +21,7 @@ class Style:
     muted: str = "#6b6b6b"
     arc: str = "#8a8a8a"
     box_fill: str = "#e7eef7"
+    node_stroke: str = "#a9bdd6"  # outline of span boxes in relation diagrams
     highlight_fill: str = "#ffe3c2"
     highlight_arc: str = "#d9480f"
     context_arc: str = "#1c7ed6"
@@ -32,6 +33,7 @@ class Style:
     label_padding: float = 10  # minimal free bar on each side of a deprel label
     row_height: float = 15
     gap_width: float = 28  # width of a "…" column for hidden words
+    lane_inset: float = 3  # relation diagrams: inset of each inner lane's box
     arrow_size: float = 5
     stroke_width: float = 1
     highlight_stroke_width: float = 2.2

@@ -1,6 +1,6 @@
 # estnltk-syntax-vis
 
-Dependency tree visualiser for [EstNLTK](https://github.com/estnltk/estnltk) `Text` objects: SVG arc diagrams, attribute rows under words and configurable span highlighting. Work in progress.
+Dependency tree and relation layer visualisers for [EstNLTK](https://github.com/estnltk/estnltk): SVG arc diagrams, attribute rows under words and configurable span highlighting. Work in progress.
 
 ## Setup
 
@@ -38,4 +38,20 @@ vis = DependencyTreeVisualiser(
 vis(text)                                    # display in Jupyter
 vis(text, highlight=text.ner[1], window=0)   # only the fragment and its head
 svg = vis.svg(text, sentence=0)              # SVG string
+```
+
+## Relation layers
+
+`RelationVisualiser` draws an EstNLTK `RelationLayer` as arcs between span boxes
+(examples in `notebooks/relations.ipynb`). Each relation is a star from its first
+filled span (or `hub`) to its other spans; sentences linked by relations share one
+diagram.
+
+```python
+from estnltk_syntax_vis import RelationVisualiser
+
+RelationVisualiser()(text.coreference)                 # mention → entity
+RelationVisualiser(label="rel_type")(text.temporal_relations)
+vis = RelationVisualiser(hub="verb", hub_label="sense_id", span_names=True)
+vis(layer, highlight=layer[0], window=0)               # one relation, its spans only
 ```

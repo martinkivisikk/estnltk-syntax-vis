@@ -149,21 +149,27 @@ def _label_x(x1: float, x2: float, crossing: list[float], need: float) -> float:
     return (a + b) / 2 if b - a >= need else (lo + hi) / 2
 
 
-def layout(sentence: SentenceModel, style: Style) -> Layout:
-    """Compute columns, arc levels and leg x positions for `sentence`.
-
-    Works on column positions: the visible words in order, with a gap column
-    wherever words are hidden. Arcs are drawn only between visible words.
-    """
-    n_words = len(sentence.words)
-    visible = sentence.visible_words
-    slots: list[int | None] = []  # word index per column, None for a gap
+def column_slots(n_words: int, visible: tuple[int, ...]) -> list[int | None]:
+    """Word index per column: the visible words in order, with `None` (a "…"
+    gap column) wherever words are hidden."""
+    slots: list[int | None] = []
     for k, i in enumerate(visible):
         if i > (visible[k - 1] if k else -1) + 1:
             slots.append(None)
         slots.append(i)
     if visible and visible[-1] < n_words - 1:
         slots.append(None)
+    return slots
+
+
+def layout(sentence: SentenceModel, style: Style) -> Layout:
+    """Compute columns, arc levels and leg x positions for `sentence`.
+
+    Works on column positions: the visible words in order, with a gap column
+    wherever words are hidden. Arcs are drawn only between visible words.
+    """
+    visible = sentence.visible_words
+    slots = column_slots(len(sentence.words), visible)
     pos = {word: p for p, word in enumerate(slots) if word is not None}
     n = len(slots)
 
