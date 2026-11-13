@@ -160,3 +160,43 @@ def test_highlight_errors(text):
         models(text, sentence=0, highlight=text.ner[-1])
     with pytest.raises(ValueError, match="empty"):
         models(text, highlight=[])
+
+
+@pytest.fixture(params=["enveloping", "word-level"])
+def spans_layer_text(request):
+    """Ticket 001: a layer named `spans` must not break span highlights.
+
+    EstNLTK resolves unknown span attributes to layers of the same name, so a
+    `getattr(span, "spans")` check picks up this layer. The layer covers
+    "Karis kohtus" (enveloping) or "Karis" (word-level), so highlighted words
+    lie inside it.
+    """
+    text = make_text(RAW, TREES)
+    if request.param == "enveloping":
+        layer = Layer(
+            "spans", attributes=("label",), text_object=text, enveloping="words"
+        )
+        layer.add_annotation(text.words[1:3], label="X")
+    else:
+        layer = Layer("spans", attributes=("label",), text_object=text, parent="words")
+        layer.add_annotation(text.words[1], label="X")
+    text.add_layer(layer)
+    return text
+
+
+@pytest.mark.parametrize(
+    ("highlight", "expected"),
+    [
+        (lambda t: t.words[1], {1}),
+        (lambda t: t.words[0:2], {0, 1}),
+        (lambda t: t.spans[0], None),  # the words of the `spans` layer's span
+        (lambda t: t.stanza_syntax[1], {1}),
+    ],
+    ids=["word", "words-slice", "spans-span", "syntax-span"],
+)
+def test_highlight_with_layer_named_spans(spans_layer_text, highlight, expected):
+    text = spans_layer_text
+    if expected is None:
+        expected = {1, 2} if text["spans"].enveloping else {1}
+    (model,) = models(text, highlight=highlight(text))
+    assert model.highlight == expected

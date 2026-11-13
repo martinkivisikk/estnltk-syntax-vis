@@ -10,7 +10,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from typing import Any
 
-from estnltk import Text
+from estnltk import Span, Text
 
 from .model import Box, Row, SentenceModel
 
@@ -45,16 +45,17 @@ def _layer(text: Text, name: str, what: str):
     return text[name]
 
 
-def _positions(span) -> list[tuple[int, int]]:
-    """Text positions covered by a span: its parts for enveloping spans."""
-    parts = getattr(span, "spans", None)
-    if parts is not None:
-        return [p for part in parts for p in _positions(part)]
-    return [(span.start, span.end)]
+def _positions(span: Span) -> list[tuple[int, int]]:
+    """Text positions of the elementary parts a span covers.
+
+    Read from the base span: attribute lookups on a `Span` (`span.spans`,
+    `hasattr`) fall back to layers of the `Text` with the same name.
+    """
+    return list(span.base_span.flatten())
 
 
 def _is_span(obj) -> bool:
-    return hasattr(obj, "start") and hasattr(obj, "end") and hasattr(obj, "base_span")
+    return isinstance(obj, Span)  # also `EnvelopingSpan`
 
 
 class _SentenceIndex:
