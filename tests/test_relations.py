@@ -1,16 +1,17 @@
-"""Extraction from RelationLayers and `RelationVisualiser`.
+"""Extraction from RelationLayers and `RelationArcVisualiser`.
 
 The layers follow the examples of EstNLTK's `relation_layer.ipynb` tutorial.
 """
 
+import base64
 import xml.etree.ElementTree as ET
 
 import pytest
 from estnltk import Text
 from helpers import add_relations, make_text
 
-import estnltk_syntax_vis.relation_visualiser as relation_visualiser_module
-from estnltk_syntax_vis import RelationVisualiser
+import estnltk_syntax_vis.relation_arc_visualiser as relation_arc_visualiser_module
+from estnltk_syntax_vis import RelationArcVisualiser
 from estnltk_syntax_vis.relation_extract import RelationConfig, extract_relations
 
 COREF = (
@@ -319,7 +320,7 @@ def test_selection_errors(temporal, coref):
 
 
 def test_visualiser_outputs(coref, roles):
-    vis = RelationVisualiser(
+    vis = RelationArcVisualiser(
         rows=[("morph_analysis", "partofspeech")], hub_label="sense"
     )
     svgs = vis.svgs(roles)
@@ -330,6 +331,12 @@ def test_visualiser_outputs(coref, roles):
     ]
     html = vis.html_output(roles)
     assert html.count('<div style="overflow-x:auto') == 3
+    assert html.count('<svg style="max-width:none" ') == 3
+    assert "max-width" not in svgs[0]
+    as_img = RelationArcVisualiser(render_svg_as_img=True).html_output(coref)
+    assert "<svg" not in as_img and as_img.count("<img ") == 1
+    uri = as_img.split("base64,")[1].split('"')[0]
+    assert base64.b64decode(uri).decode("utf-8") == RelationArcVisualiser().svg(coref)
     with pytest.raises(ValueError, match="gives 3 diagrams"):
         vis.svg(roles)
     svg = vis.svg(roles, highlight=roles[0], window=0)
@@ -344,15 +351,17 @@ def test_visualiser_outputs(coref, roles):
         "Majas",
         "teisipäeval",
     ]
-    assert RelationVisualiser().svg(coref).startswith("<svg")
+    assert RelationArcVisualiser().svg(coref).startswith("<svg")
 
 
 def test_visualiser_call_displays(monkeypatch, temporal):
     shown = []
     monkeypatch.setattr(
-        relation_visualiser_module, "display_html", lambda html, raw: shown.append(html)
+        relation_arc_visualiser_module,
+        "display_html",
+        lambda html, raw: shown.append(html),
     )
-    RelationVisualiser(label="rel_type")(temporal)
+    RelationArcVisualiser(label="rel_type")(temporal)
     assert len(shown) == 1 and "BEFORE" in shown[0]
 
 
@@ -366,4 +375,4 @@ def test_visualiser_call_displays(monkeypatch, temporal):
 )
 def test_visualiser_errors(kwargs, message):
     with pytest.raises(ValueError, match=message):
-        RelationVisualiser(**kwargs)
+        RelationArcVisualiser(**kwargs)

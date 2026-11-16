@@ -17,11 +17,22 @@ class Row:
 
 @dataclass(frozen=True)
 class Box:
-    """A background box over the words `start .. end - 1` with an optional label."""
+    """A background box over the words `start .. end - 1`.
+
+    `label` and `detail` are the label lines under the box (empty = no line).
+    `relation` is the index of the relation the box comes from, if any.
+    """
 
     start: int
     end: int
     label: str = ""
+    detail: str = ""
+    relation: int | None = None
+
+    @property
+    def lines(self) -> tuple[str, ...]:
+        """The non-empty label lines, top to bottom."""
+        return tuple(line for line in (self.label, self.detail) if line)
 
 
 @dataclass(frozen=True)

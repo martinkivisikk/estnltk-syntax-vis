@@ -74,3 +74,43 @@ def test_window_draws_gaps_and_clips_boxes():
     assert words == ["Vabariigi", "president", "kohtus"]
     assert len(classes(root, "gap")) == 2  # before Vabariigi, before kohtus
     assert [e.text for e in classes(root, "box-label")] == ["LOC"]  # PER is hidden
+
+
+def _rect(e):
+    x, y = float(e.get("x")), float(e.get("y"))
+    return x, y, x + float(e.get("width")), y + float(e.get("height"))
+
+
+def test_overlapping_boxes_stack_their_labels():
+    words = "Tartu Ülikooli rektor Toomas Asser kohtus"
+    heads = [2, 3, 6, 3, 4, 0]
+    nested = (Box(0, 2, "ORG"), Box(2, 5, "PER+TITLE"), Box(3, 5, "PER"))
+    root = parse(render_svg(make(words, heads, boxes=nested)))
+    y = {e.text: float(e.get("y")) for e in classes(root, "box-label")}
+    # the inner PER label is above the outer PER+TITLE label; ORG overlaps
+    # neither, so it shares the first label line with PER
+    assert y["PER"] < y["PER+TITLE"]
+    assert y["ORG"] == y["PER"]
+    lanes = {e.get("data-lane") for e in classes(root, "box")}
+    assert lanes == {"0", "1"}
+    boxes = [_rect(e) for e in classes(root, "box")]
+    per_title = max(boxes, key=lambda r: r[3])  # the outer box reaches lowest
+    per = [r for r in boxes if r[0] > per_title[0] and r[2] < per_title[2]]
+    # exactly one box (PER) lies inside PER+TITLE, inset, and ends above it
+    assert len(per) == 1 and per[0][3] < per_title[3]
+    # semi-transparent fills, so overlapping regions get darker
+    assert all(e.get("fill-opacity") for e in classes(root, "box"))
+    # the stacked label line makes the diagram taller
+    flat = parse(render_svg(make(words, heads, boxes=nested[:2])))
+    assert float(root.get("height")) > float(flat.get("height"))
+
+
+def test_relation_box_has_detail_line():
+    box = Box(0, 2, "subject (3)", "meet", relation=3)
+    root = parse(render_svg(make("Alar Karis kohtus", [3, 1, 0], boxes=(box,))))
+    (label,) = classes(root, "box-label")
+    (detail,) = classes(root, "box-detail")
+    assert (label.text, detail.text) == ("subject (3)", "meet")
+    assert float(detail.get("y")) > float(label.get("y"))
+    (rect,) = classes(root, "box")
+    assert rect.get("data-relation") == "3"

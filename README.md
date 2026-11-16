@@ -32,26 +32,44 @@ text.tag_layer(["maltparser_syntax", "ner"])
 vis = DependencyTreeVisualiser(
     syntax_layer="maltparser_syntax",   # default: "stanza_syntax" (StanzaSyntaxTagger)
     rows=[("morph_analysis", "partofspeech"), ("morph_analysis", "form")],
-    span_layer="ner",
-    span_label="nertag",
+    overlay_layer="ner",
+    overlay_label="nertag",
 )
 vis(text)                                    # display in Jupyter
 vis(text, highlight=text.ner[1], window=0)   # only the fragment and its head
 svg = vis.svg(text, sentence=0)              # SVG string
 ```
 
+For rows from ambiguous layers such as `morph_analysis`, `ambiguous="first"` (default)
+shows the first annotation's value and `ambiguous="all"` the distinct values joined
+with `|`. `ambiguous` applies only to `rows`: overlay labels from an ambiguous
+`overlay_layer` always show all distinct values.
+
 ## Relation layers
 
-`RelationVisualiser` draws an EstNLTK `RelationLayer` as arcs between span boxes
+A `RelationLayer` can be the overlay of a dependency tree. Each named span of each
+relation becomes a box labelled `name (index)`, with the relation's index in the layer;
+`overlay_label` names a relation attribute shown as a second line. Overlapping boxes
+(also in span layers) get their own label lines, and nested boxes enclose each other.
+
+```python
+DependencyTreeVisualiser(
+    syntax_layer="maltparser_syntax",
+    overlay_layer="temporal_relations",
+    overlay_label="rel_type",
+)(text)
+```
+
+`RelationArcVisualiser` draws an EstNLTK `RelationLayer` as arcs between span boxes
 (examples in `notebooks/relations.ipynb`). Each relation is a star from its first
 filled span (or `hub`) to its other spans; sentences linked by relations share one
 diagram.
 
 ```python
-from estnltk_syntax_vis import RelationVisualiser
+from estnltk_syntax_vis import RelationArcVisualiser
 
-RelationVisualiser()(text.coreference)                 # mention → entity
-RelationVisualiser(label="rel_type")(text.temporal_relations)
-vis = RelationVisualiser(hub="verb", hub_label="sense_id", span_names=True)
+RelationArcVisualiser()(text.coreference)              # mention → entity
+RelationArcVisualiser(label="rel_type")(text.temporal_relations)
+vis = RelationArcVisualiser(hub="verb", hub_label="sense_id", span_names=True)
 vis(layer, highlight=layer[0], window=0)               # one relation, its spans only
 ```

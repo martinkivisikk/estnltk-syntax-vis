@@ -20,7 +20,12 @@ class Style:
     text: str = "#222"
     muted: str = "#6b6b6b"
     arc: str = "#8a8a8a"
-    box_fill: str = "#e7eef7"
+    box_fill: str = "#e7eef7"  # span boxes in relation diagrams
+    # Overlay boxes: semi-transparent, so overlapping boxes get darker
+    box_tint: str = "#8fb0dc"
+    box_tint_opacity: float = 0.3
+    box_stroke: str = "#9db4d4"
+    box_lane_gap: float = 5  # space under each lane of overlay box labels
     node_stroke: str = "#a9bdd6"  # outline of span boxes in relation diagrams
     highlight_fill: str = "#ffe3c2"
     highlight_arc: str = "#d9480f"
@@ -33,7 +38,7 @@ class Style:
     label_padding: float = 10  # minimal free bar on each side of a deprel label
     row_height: float = 15
     gap_width: float = 28  # width of a "…" column for hidden words
-    lane_inset: float = 3  # relation diagrams: inset of each inner lane's box
+    lane_inset: float = 3  # inset per inner lane (overlays, relation diagrams)
     arrow_size: float = 5
     stroke_width: float = 1
     highlight_stroke_width: float = 2.2

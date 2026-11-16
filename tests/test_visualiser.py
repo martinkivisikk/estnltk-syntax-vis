@@ -1,7 +1,9 @@
+import base64
+import re
 import xml.etree.ElementTree as ET
 
 import pytest
-from helpers import make_text
+from helpers import add_relations, make_text
 
 import estnltk_syntax_vis.visualiser as visualiser_module
 from estnltk_syntax_vis import DependencyTreeVisualiser
@@ -21,7 +23,9 @@ def text():
 @pytest.fixture
 def vis():
     return DependencyTreeVisualiser(
-        rows=[("morph_analysis", "partofspeech")], span_layer="ner", span_label="nertag"
+        rows=[("morph_analysis", "partofspeech")],
+        overlay_layer="ner",
+        overlay_label="nertag",
     )
 
 
@@ -52,6 +56,28 @@ def test_html_output_has_all_sentences(text, vis):
     assert vis.html_output(text, highlight=text.ner[0]).count("<svg") == 1
 
 
+def test_html_output_scrolls_instead_of_shrinking(text, vis):
+    # JupyterLab's `svg { max-width: 100% }` would scale wide diagrams down
+    html = vis.html_output(text)
+    assert html.count('<svg style="max-width:none" ') == 2
+    assert html.count('<div style="overflow-x:auto') == 2
+    # svg() output stays a plain SVG
+    assert "max-width" not in vis.svg(text, sentence=0)
+
+
+def test_render_svg_as_img(text):
+    vis = DependencyTreeVisualiser(overlay_layer="ner", render_svg_as_img=True)
+    html = vis.html_output(text)
+    assert "<svg" not in html
+    uris = re.findall(r'<img src="data:image/svg\+xml;base64,([^"]+)" ', html)
+    assert len(uris) == 2
+    assert html.count('style="max-width:none"') == 2
+    # each data URI decodes back to exactly the plain SVG
+    decoded = [base64.b64decode(u).decode("utf-8") for u in uris]
+    assert decoded == vis.svgs(text)
+    assert vis.svg(text, sentence=0).startswith("<svg")
+
+
 def test_call_displays_html(text, vis, monkeypatch):
     shown = []
     monkeypatch.setattr(
@@ -65,3 +91,30 @@ def test_call_displays_html(text, vis, monkeypatch):
 def test_invalid_ambiguous_option():
     with pytest.raises(ValueError, match="ambiguous"):
         DependencyTreeVisualiser(ambiguous="last")
+
+
+def test_relation_layer_overlay():
+    text = make_text(RAW, TREES)
+    add_relations(
+        text,
+        "coreference",
+        ["mention", "entity"],
+        [
+            {"mention": ("Ta", 1), "entity": "Alar Karis", "kind": "pronoun"},
+            {"mention": "Tallinnas", "entity": "Tallinnas", "kind": "self"},
+        ],
+        attributes=("kind",),
+    )
+    vis = DependencyTreeVisualiser(overlay_layer="coreference", overlay_label="kind")
+    first, second = (ET.fromstring(svg) for svg in vis.svgs(text))
+
+    def texts(root, cls):
+        return sorted(e.text for e in root.iter() if e.get("class") == cls)
+
+    # the relation across sentences shows its span in each sentence, same index
+    assert texts(first, "box-label") == ["entity (0)", "entity (1)", "mention (1)"]
+    assert texts(second, "box-label") == ["mention (0)"]
+    assert texts(first, "box-detail") == ["pronoun", "self", "self"]
+    # two identical boxes over "Tallinnas" are stacked in two lanes
+    lanes = [e.get("data-lane") for e in first.iter() if e.get("class") == "box"]
+    assert sorted(lanes) == ["0", "0", "1"]

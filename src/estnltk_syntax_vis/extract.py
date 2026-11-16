@@ -30,9 +30,9 @@ class ExtractionConfig:
     syntax_layer: str = "stanza_syntax"
     sentence_layer: str = "sentences"
     rows: tuple[RowSpec, ...] = ()
-    span_layer: str | None = None
-    span_label: str | None = None
-    ambiguous: str = "first"  # "first" or "all" annotations of ambiguous layers
+    overlay_layer: str | None = None
+    overlay_label: str | None = None
+    ambiguous: str = "first"  # rows only: "first" or "all" annotations
     missing: str = "-"  # shown for a missing span or value
 
 
@@ -90,7 +90,13 @@ class _SentenceIndex:
         return k
 
 
-def _value(span, attribute: str, config: ExtractionConfig) -> str:
+def _value(
+    span, attribute: str, config: ExtractionConfig, ambiguous: str | None = None
+) -> str:
+    """The attribute's value, or distinct values joined with `|`.
+
+    `ambiguous` overrides `config.ambiguous`; overlay labels pass `"all"`.
+    """
     if span is None:
         return config.missing
     values = []
@@ -100,7 +106,8 @@ def _value(span, attribute: str, config: ExtractionConfig) -> str:
             values.append(str(value))
     if not values:
         return config.missing
-    return values[0] if config.ambiguous == "first" else "|".join(values)
+    mode = ambiguous or config.ambiguous
+    return values[0] if mode == "first" else "|".join(values)
 
 
 def _row(text: Text, spec: RowSpec, words: list, config: ExtractionConfig) -> Row:
@@ -127,32 +134,68 @@ def _row(text: Text, spec: RowSpec, words: list, config: ExtractionConfig) -> Ro
     return Row(label, tuple(values))
 
 
-def _boxes(text: Text, words: list, config: ExtractionConfig) -> tuple[Box, ...]:
-    if config.span_layer is None:
-        return ()
-    layer = _layer(text, config.span_layer, "Span")
-    if config.span_label is not None and config.span_label not in layer.attributes:
+def _covered(words: list, start: int, end: int) -> tuple[int, int] | None:
+    """Word range `(first, end)` of the words fully inside `start .. end`."""
+    if not words or end <= words[0].start or start >= words[-1].end:
+        return None
+    inside = [i for i, w in enumerate(words) if start <= w.start and w.end <= end]
+    if not inside:
+        return None
+    return inside[0], inside[-1] + 1
+
+
+def _check_label(layer, config: ExtractionConfig) -> None:
+    label = config.overlay_label
+    if label is not None and label not in layer.attributes:
         raise ValueError(
-            f"layer {config.span_layer!r} has no attribute {config.span_label!r}"
+            f"layer {config.overlay_layer!r} has no attribute {label!r} "
+            f"(attributes: {', '.join(layer.attributes) or 'none'})"
         )
-    if not words:
+
+
+def _boxes(text: Text, words: list, config: ExtractionConfig) -> tuple[Box, ...]:
+    if config.overlay_layer is None:
         return ()
-    first, last = words[0].start, words[-1].end
+    if config.overlay_layer in text.relation_layers:
+        return _relation_boxes(text[config.overlay_layer], words, config)
+    layer = _layer(text, config.overlay_layer, "Overlay")
+    _check_label(layer, config)
     boxes = []
     for span in layer:
-        if span.end <= first or span.start >= last:
-            continue
-        inside = [
-            i
-            for i, w in enumerate(words)
-            if span.start <= w.start and w.end <= span.end
-        ]
-        if not inside:
+        covered = _covered(words, span.start, span.end)
+        if covered is None:
             continue
         label = (
-            "" if config.span_label is None else _value(span, config.span_label, config)
+            ""
+            if config.overlay_label is None
+            else _value(span, config.overlay_label, config, ambiguous="all")
         )
-        boxes.append(Box(inside[0], inside[-1] + 1, label))
+        boxes.append(Box(*covered, label))
+    return tuple(boxes)
+
+
+def _relation_boxes(layer, words: list, config: ExtractionConfig) -> tuple[Box, ...]:
+    """One box per filled named span of each relation, labelled `name (index)`.
+
+    The index is the relation's position in the layer, as in
+    `RelationLayer.display()`. `overlay_label` (a relation attribute) is shown as
+    a second line, with all distinct values of an ambiguous relation.
+    """
+    _check_label(layer, config)
+    boxes = []
+    for index, relation in enumerate(layer):
+        detail = (
+            ""
+            if config.overlay_label is None
+            else _value(relation, config.overlay_label, config, ambiguous="all")
+        )
+        for named in relation.spans:
+            covered = _covered(words, named.start, named.end)
+            if covered is None:
+                continue
+            boxes.append(
+                Box(*covered, f"{named.name} ({index})", detail, relation=index)
+            )
     return tuple(boxes)
 
 

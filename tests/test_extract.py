@@ -1,6 +1,6 @@
 import pytest
 from estnltk import Layer
-from helpers import make_text
+from helpers import add_relations, make_text
 
 from estnltk_syntax_vis.extract import ExtractionConfig, extract
 
@@ -121,14 +121,81 @@ def test_invalid_row_spec(plain):
         models(plain, rows=("morph_analysis",))
 
 
-def test_boxes_from_span_layer(text):
-    first, second = models(text, span_layer="ner", span_label="nertag")
+def test_boxes_from_overlay_layer(text):
+    first, second = models(text, overlay_layer="ner", overlay_label="nertag")
     labels = {(b.start, b.end): b.label for b in first.boxes}
     assert labels[(0, 2)] == "PER"
     assert labels[(4, 5)] == "LOC"
     assert [(b.start, b.end, b.label) for b in second.boxes] == [(2, 3, "LOC")]
-    (unlabelled,) = models(text, sentence=0, span_layer="ner")
+    (unlabelled,) = models(text, sentence=0, overlay_layer="ner")
     assert {b.label for b in unlabelled.boxes} == {""}
+
+
+@pytest.mark.parametrize("ambiguous", ["first", "all"])
+def test_ambiguous_overlay_label_shows_all_values(plain, ambiguous):
+    layer = Layer("amb_ner", attributes=("tag",), text_object=plain, ambiguous=True)
+    name = plain.words[0:2]
+    layer.add_annotation((name[0].start, name[1].end), tag="PER")
+    layer.add_annotation((name[0].start, name[1].end), tag="ORG")
+    layer.add_annotation((name[0].start, name[1].end), tag="PER")
+    plain.add_layer(layer)
+    (model,) = models(
+        plain,
+        sentence=0,
+        overlay_layer="amb_ner",
+        overlay_label="tag",
+        ambiguous=ambiguous,
+    )
+    assert [(b.start, b.end, b.label) for b in model.boxes] == [(0, 2, "PER|ORG")]
+
+
+@pytest.fixture
+def relations(plain):
+    add_relations(
+        plain,
+        "roles",
+        ["subject", "object", "antecedent"],
+        [
+            {"subject": "Alar Karis", "object": "Soome peaministriga", "rel": "meet"},
+            {"subject": ("Ta", 1), "object": "Tartusse", "rel": ["return", "go"]},
+            {"subject": ("Ta", 1), "antecedent": "Alar Karis"},  # across sentences
+        ],
+        attributes=("rel",),
+        ambiguous=True,
+    )
+    return plain
+
+
+def test_boxes_from_relation_layer(relations):
+    first, second = models(relations, overlay_layer="roles")
+    boxes = lambda m: {(b.start, b.end, b.label, b.relation) for b in m.boxes}  # noqa: E731
+    # one box per filled named span; the index is the relation's index in the layer
+    assert boxes(first) == {
+        (0, 2, "subject (0)", 0),
+        (5, 7, "object (0)", 0),
+        (0, 2, "antecedent (2)", 2),
+    }
+    assert boxes(second) == {
+        (0, 1, "subject (1)", 1),
+        (2, 3, "object (1)", 1),
+        (0, 1, "subject (2)", 2),
+    }
+    assert {b.lines for b in first.boxes} == {
+        ("subject (0)",),
+        ("object (0)",),
+        ("antecedent (2)",),
+    }
+
+
+def test_relation_overlay_label(relations):
+    first, second = models(relations, overlay_layer="roles", overlay_label="rel")
+    by_label = {b.label: b.lines for m in (first, second) for b in m.boxes}
+    assert by_label["subject (0)"] == ("subject (0)", "meet")
+    # ambiguous relation: all distinct values, whatever `ambiguous` is
+    assert by_label["object (1)"] == ("object (1)", "return|go")
+    assert by_label["subject (2)"] == ("subject (2)", "-")  # no value: `missing`
+    with pytest.raises(ValueError, match="has no attribute 'nope' .attributes: rel"):
+        models(relations, overlay_layer="roles", overlay_label="nope")
 
 
 def test_highlight_span_finds_sentence(text):
@@ -164,7 +231,7 @@ def test_highlight_errors(text):
 
 @pytest.fixture(params=["enveloping", "word-level"])
 def spans_layer_text(request):
-    """Ticket 001: a layer named `spans` must not break span highlights.
+    """A layer named `spans` must not break span highlights.
 
     EstNLTK resolves unknown span attributes to layers of the same name, so a
     `getattr(span, "spans")` check picks up this layer. The layer covers

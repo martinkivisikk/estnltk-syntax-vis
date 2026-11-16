@@ -1,5 +1,6 @@
 """SVG rendering of a sentence model with rectangular dependency arcs."""
 
+import base64
 from html import escape
 
 from .layout import Arc, layout, text_width
@@ -23,6 +24,30 @@ def _runs(indices: frozenset[int]) -> list[tuple[int, int]]:
     return runs
 
 
+def html_blocks(svgs: list[str], as_img: bool = False) -> str:
+    """Wrap each SVG in its own horizontally scrollable `div`.
+
+    `max-width:none` on the `<svg>` overrides notebook CSS such as JupyterLab's
+    `svg { max-width: 100%; height: auto }`, which would otherwise scale wide
+    diagrams down to the cell width instead of letting the `div` scroll.
+
+    With `as_img`, each SVG is put in an `<img>` as a base64 data URI instead.
+    Jupyter strips inline `<svg>` from the saved outputs of an untrusted notebook
+    but keeps `<img>`, so the diagrams show without re-running the cells.
+    """
+    blocks = []
+    for svg in svgs:
+        if as_img:
+            data = base64.b64encode(svg.encode("utf-8")).decode("ascii")
+            inner = (
+                f'<img src="data:image/svg+xml;base64,{data}" style="max-width:none">'
+            )
+        else:
+            inner = svg.replace("<svg ", '<svg style="max-width:none" ', 1)
+        blocks.append(f'<div style="overflow-x:auto;margin-bottom:12px">{inner}</div>')
+    return "\n".join(blocks)
+
+
 def render_svg(sentence: SentenceModel, style: Style | None = None) -> str:
     """Draw `sentence` as an SVG dependency diagram and return the SVG string."""
     s = style or Style()
@@ -42,9 +67,23 @@ def render_svg(sentence: SentenceModel, style: Style | None = None) -> str:
     y_legs = s.margin + root_label_h + (lay.max_level + 1) * s.level_height
     y_word = y_legs + 4 + s.word_font_size  # baseline of the words
     y_rows = [y_word + (k + 1) * s.row_height for k in range(len(sentence.rows))]
-    y_box_label = (y_rows[-1] if y_rows else y_word) + s.row_height
-    y_last = y_box_label if sentence.boxes else (y_rows[-1] if y_rows else y_word)
-    y_bottom = y_last + 5  # bottom of boxes
+    y_under = y_rows[-1] if y_rows else y_word  # last text line above box labels
+    # Box label lanes, top to bottom; each is as tall as its most label lines
+    shown = [
+        (box, lane, inset)
+        for box, lane, inset in zip(
+            sentence.boxes, lay.box_lanes, lay.box_insets, strict=True
+        )
+        if lane is not None
+    ]
+    n_lanes = max((lane for _, lane, _ in shown), default=-1) + 1
+    lane_lines = [0] * n_lanes
+    for box, lane, _ in shown:
+        lane_lines[lane] = max(lane_lines[lane], len(box.lines))
+    lane_top = [y_under]
+    for lines in lane_lines:
+        lane_top.append(lane_top[-1] + lines * s.row_height + s.box_lane_gap)
+    y_bottom = lane_top[-1] if shown else y_under + 5  # bottom of boxes
     width = x0 + lay.width + s.margin
     height = y_bottom + s.margin
 
@@ -81,16 +120,22 @@ def render_svg(sentence: SentenceModel, style: Style | None = None) -> str:
             return None
         return cols[0].x + 2, cols[-1].x + cols[-1].width - 2
 
-    # Boxes, then the highlight on top of them
-    box_extents = [(box, extent(box.start, box.end)) for box in sentence.boxes]
-    for _, ext in box_extents:
-        if ext is None:
-            continue
-        left, right = ext
+    # Boxes (outer lanes first), then the highlight on top of them
+    rects = []  # (box, lane, left, top, right, bottom)
+    for box, lane, inset in shown:
+        left, right = extent(box.start, box.end)  # type: ignore[misc]
+        d = inset * s.lane_inset
+        rects.append((box, lane, left + d, y_legs + 1, right - d, lane_top[lane + 1]))
+    rects.sort(key=lambda r: -r[1])
+    # Semi-transparent fills: where boxes overlap they add up and get darker
+    fill = f'fill="{s.box_tint}" fill-opacity="{_f(s.box_tint_opacity)}"'
+    for box, lane, left, top, right, bottom in rects:
+        relation = "" if box.relation is None else f' data-relation="{box.relation}"'
         out.append(
-            f'<rect class="box" x="{_f(left)}" y="{_f(y_legs + 1)}" '
-            f'width="{_f(right - left)}" height="{_f(y_bottom - y_legs - 1)}" '
-            f'rx="4" fill="{s.box_fill}"/>'
+            f'<rect class="box" x="{_f(left)}" y="{_f(top)}" '
+            f'width="{_f(right - left)}" height="{_f(bottom - top)}" rx="4" '
+            f'{fill} stroke="{s.box_stroke}" stroke-width="1" '
+            f'data-lane="{lane}"{relation}/>'
         )
     for start, end in _runs(highlight & lay.column_of.keys()):
         left, right = extent(start, end)  # type: ignore[misc]
@@ -175,15 +220,19 @@ def render_svg(sentence: SentenceModel, style: Style | None = None) -> str:
                 f'text-anchor="middle" font-size="{_f(s.row_font_size)}" '
                 f'fill="{s.muted}">{escape(row.values[i])}</text>'
             )
-    for box, ext in box_extents:
-        if ext is None:
-            continue
-        out.append(
-            f'<text class="box-label" x="{_f(sum(ext) / 2)}" '
-            f'y="{_f(y_box_label)}" text-anchor="middle" '
-            f'font-size="{_f(s.row_font_size)}" fill="{s.text}">'
-            f"{escape(box.label)}</text>"
-        )
+    for box, lane, left, _, right, _ in rects:
+        for j, (cls, line) in enumerate(
+            (c, t)
+            for c, t in (("box-label", box.label), ("box-detail", box.detail))
+            if t
+        ):
+            colour = s.text if cls == "box-label" else s.muted
+            out.append(
+                f'<text class="{cls}" x="{_f((left + right) / 2)}" '
+                f'y="{_f(lane_top[lane] + (j + 1) * s.row_height)}" '
+                f'text-anchor="middle" font-size="{_f(s.row_font_size)}" '
+                f'fill="{colour}">{escape(line)}</text>'
+            )
     out.append("</g>")
 
     # Row labels, right-aligned in their own column

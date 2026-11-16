@@ -77,6 +77,8 @@ class Layout:
     root_x: dict[int, float]  # root word -> x of its root arrow
     max_level: int
     width: float  # width of the word area (without margins and row labels)
+    box_lanes: tuple[int | None, ...] = ()  # label lane per box, None = hidden
+    box_insets: tuple[int, ...] = ()  # inset steps per box (inner boxes > 0)
 
 
 def arc_levels(arcs: list[tuple[int, int]]) -> list[int]:
@@ -95,6 +97,56 @@ def arc_levels(arcs: list[tuple[int, int]]) -> list[int]:
         levels[k] = 1 + max(below, default=0)
         placed.append((lo, hi, levels[k]))
     return levels
+
+
+def box_lanes(ranges: list[tuple[int, int] | None]) -> list[int | None]:
+    """Label lane of each box, given as inclusive column ranges (`None` = hidden).
+
+    Shorter boxes are placed first, each in the lowest lane that no overlapping
+    box uses yet. A box inside another one thus gets a lower lane: its labels
+    are drawn above the outer box's labels and the outer box reaches below it.
+    """
+    order = sorted(
+        (k for k, r in enumerate(ranges) if r is not None),
+        key=lambda k: (ranges[k][1] - ranges[k][0], ranges[k][0]),  # type: ignore[index]
+    )
+    lanes: list[int | None] = [None] * len(ranges)
+    placed: list[tuple[int, int, int]] = []  # (first, last, lane)
+    for k in order:
+        first, last = ranges[k]  # type: ignore[misc]
+        taken = {lane for (a, b, lane) in placed if a <= last and first <= b}
+        lanes[k] = next(lane for lane in range(len(taken) + 1) if lane not in taken)
+        placed.append((first, last, lanes[k]))  # type: ignore[arg-type]
+    return lanes
+
+
+def box_insets(
+    ranges: list[tuple[int, int] | None], lanes: list[int | None]
+) -> list[int]:
+    """Inset steps per box: the highest lane among the boxes it overlaps
+    (directly or through other boxes) minus its own lane, so that boxes in
+    lower lanes are drawn inside the boxes around them."""
+    group = list(range(len(ranges)))
+
+    def root(k: int) -> int:
+        while group[k] != k:
+            group[k] = group[group[k]]
+            k = group[k]
+        return k
+
+    shown = [k for k, r in enumerate(ranges) if r is not None]
+    for x, a in enumerate(shown):
+        for b in shown[x + 1 :]:
+            (a1, a2), (b1, b2) = ranges[a], ranges[b]  # type: ignore[misc]
+            if a1 <= b2 and b1 <= a2:
+                group[root(a)] = root(b)
+    top: dict[int, int] = {}
+    for k in shown:
+        top[root(k)] = max(top.get(root(k), 0), lanes[k])  # type: ignore[arg-type]
+    return [
+        top[root(k)] - lanes[k] if ranges[k] is not None else 0  # type: ignore[operator]
+        for k in range(len(ranges))
+    ]
 
 
 def leg_offsets(
@@ -190,12 +242,23 @@ def layout(sentence: SentenceModel, style: Style) -> Layout:
         texts += [text_width(r.values[i], style.row_font_size) for r in sentence.rows]
         legs = (counts[p] - 1) * style.leg_gap
         widths.append(max(max(texts), legs) + style.word_padding)
-    # Box labels are centred under their boxes; widen boxes that are too narrow
+    # Boxes: label lanes and insets on the visible columns
+    ranges: list[tuple[int, int] | None] = []
     for box in sentence.boxes:
         cols = [pos[i] for i in range(box.start, box.end) if i in pos]
-        if not cols:
+        ranges.append((cols[0], cols[-1]) if cols else None)
+    lanes = box_lanes(ranges)
+    insets = box_insets(ranges, lanes)
+    # Box labels are centred under their boxes; widen boxes that are too narrow
+    for box, cols_range, inset in zip(sentence.boxes, ranges, insets, strict=True):
+        if cols_range is None:
             continue
-        need = text_width(box.label, style.row_font_size) + style.word_padding
+        cols = list(range(cols_range[0], cols_range[1] + 1))
+        need = (
+            max((text_width(t, style.row_font_size) for t in box.lines), default=0)
+            + style.word_padding
+            + 2 * inset * style.lane_inset
+        )
         have = sum(widths[cols[0] : cols[-1] + 1])
         if need > have:
             for p in cols:
@@ -257,5 +320,12 @@ def layout(sentence: SentenceModel, style: Style) -> Layout:
     width = columns[-1].x + columns[-1].width if columns else 0.0
     column_of = {c.word: c for c in columns if c.word is not None}
     return Layout(
-        columns, column_of, tuple(arcs), root_x, max(levels, default=0), width
+        columns,
+        column_of,
+        tuple(arcs),
+        root_x,
+        max(levels, default=0),
+        width,
+        tuple(lanes),
+        tuple(insets),
     )

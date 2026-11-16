@@ -1,7 +1,13 @@
 from helpers import make
 
 from estnltk_syntax_vis import Style
-from estnltk_syntax_vis.layout import arc_levels, layout, text_width
+from estnltk_syntax_vis.layout import (
+    arc_levels,
+    box_insets,
+    box_lanes,
+    layout,
+    text_width,
+)
 
 
 def test_levels_nested():
@@ -102,3 +108,22 @@ def test_gap_columns_and_hidden_arcs():
     assert set(lay.root_x) == {5}
     xs = [c.x for c in lay.columns]
     assert xs == sorted(xs)
+
+
+def test_box_lanes_nested_partial_and_identical():
+    # nested: the inner box gets the lower lane, the outer one goes under it
+    assert box_lanes([(2, 4), (3, 4)]) == [1, 0]
+    # partial overlap: separate lanes; boxes apart share lane 0
+    assert box_lanes([(0, 2), (1, 3), (5, 6)]) == [0, 1, 0]
+    # identical spans stack; hidden boxes get no lane
+    assert box_lanes([(1, 2), (1, 2), (1, 2), None]) == [0, 1, 2, None]
+
+
+def test_box_insets_follow_overlap_groups():
+    ranges = [(2, 4), (3, 4), (6, 6), (1, 2), None]
+    lanes = box_lanes(ranges)
+    assert lanes == [1, 0, 0, 0, None]
+    # (3, 4) and (1, 2) lie under (2, 4): one group up to lane 1, so they are
+    # inset by one step; the lone box (6, 6) and the hidden one are not inset
+    assert box_insets(ranges, lanes) == [0, 1, 0, 1, 0]
+    assert box_insets([(1, 2), (1, 2), (1, 2)], [0, 1, 2]) == [2, 1, 0]

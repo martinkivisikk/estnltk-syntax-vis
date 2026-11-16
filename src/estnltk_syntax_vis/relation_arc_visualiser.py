@@ -1,4 +1,4 @@
-"""`RelationVisualiser`: EstNLTK relation layers as SVG arc diagrams."""
+"""`RelationArcVisualiser`: EstNLTK relation layers as SVG arc diagrams."""
 
 from collections.abc import Callable, Iterable, Sequence
 from typing import Any
@@ -12,11 +12,12 @@ from .relation_extract import EdgeSpec, RelationConfig, extract_relations, targe
 from .relation_model import relation_window
 from .relation_svg import render_relation_svg
 from .style import Style
+from .svg import html_blocks
 
 Relations = Relation | Iterable[Relation] | None
 
 
-class RelationVisualiser:
+class RelationArcVisualiser:
     """Draws the relations of a `RelationLayer` as arcs between span boxes.
 
     Each relation becomes edges between its named spans. By default this is a
@@ -24,9 +25,13 @@ class RelationVisualiser:
     order) to each other filled span, so a two-span layer (`mention`, `entity`)
     gets one arc per relation and a PropBank-style layer (`verb`, `arg0`, ...)
     gets arcs from the verb to its arguments. Sentences linked by relations are
-    drawn in one diagram, with "…" for the sentences between them::
+    drawn in one diagram, with "…" for the sentences between them.
 
-        vis = RelationVisualiser(label="rel_type")
+    This is one way to show a relation layer. A `RelationLayer` does not define
+    relations as directed links between its spans; the arc direction only comes
+    from the `span_names` order (or `hub`/`edges`)::
+
+        vis = RelationArcVisualiser(label="rel_type")
         vis(text["temporal_relations"])          # display in a notebook
         vis(layer, highlight=layer[0], window=2) # one relation, 2 words around
         svg = vis.svg(layer, relation=layer[0])
@@ -62,6 +67,13 @@ class RelationVisualiser:
         get the word's span of `words_layer`.
     style
         Colours and sizes, see `Style`.
+    render_svg_as_img
+        In `html_output()` and notebook display, put each SVG in an `<img>` as a
+        base64 data URI instead of inline `<svg>`. Use it for notebooks whose
+        saved outputs should show the diagrams when opened without re-running
+        (Jupyter strips inline SVG from untrusted outputs). Off by default: text
+        in an `<img>` cannot be selected or searched and page CSS cannot style
+        it. `svg()` and `svgs()` always return plain SVG.
     """
 
     def __init__(
@@ -79,6 +91,7 @@ class RelationVisualiser:
         ambiguous: str = "first",
         missing: str = "-",
         style: Style | None = None,
+        render_svg_as_img: bool = False,
     ):
         if ambiguous not in ("first", "all"):
             raise ValueError(f"ambiguous must be 'first' or 'all', got {ambiguous!r}")
@@ -101,6 +114,7 @@ class RelationVisualiser:
             missing=missing,
         )
         self.style = style or Style()
+        self.render_svg_as_img = render_svg_as_img
 
     def svgs(
         self,
@@ -158,11 +172,12 @@ class RelationVisualiser:
     ) -> str:
         """HTML with the diagrams (see `svgs` for the arguments).
 
-        Each diagram is in its own horizontally scrollable `div`.
+        Each diagram is in its own horizontally scrollable `div`; wide diagrams
+        scroll instead of being scaled down to the notebook cell width.
         """
-        return "\n".join(
-            f'<div style="overflow-x:auto;margin-bottom:12px">{svg}</div>'
-            for svg in self.svgs(layer, sentence, relation, highlight, window)
+        return html_blocks(
+            self.svgs(layer, sentence, relation, highlight, window),
+            as_img=self.render_svg_as_img,
         )
 
     def __call__(
