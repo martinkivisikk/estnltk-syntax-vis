@@ -34,6 +34,8 @@ def html_blocks(svgs: list[str], as_img: bool = False) -> str:
     With `as_img`, each SVG is put in an `<img>` as a base64 data URI instead.
     Jupyter strips inline `<svg>` from the saved outputs of an untrusted notebook
     but keeps `<img>`, so the diagrams show without re-running the cells.
+    GitHub's notebook viewer does the opposite: it keeps inline SVG and blocks
+    data URIs.
     """
     blocks = []
     for svg in svgs:

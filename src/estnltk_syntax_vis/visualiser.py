@@ -59,9 +59,11 @@ class DependencyTreeVisualiser:
         In `html_output()` and notebook display, put each SVG in an `<img>` as a
         base64 data URI instead of inline `<svg>`. Use it for notebooks whose
         saved outputs should show the diagrams when opened without re-running
-        (Jupyter strips inline SVG from untrusted outputs). Off by default: text
-        in an `<img>` cannot be selected or searched and page CSS cannot style
-        it. `svg()` and `svgs()` always return plain SVG.
+        (Jupyter strips inline SVG from untrusted outputs). Off by default:
+        GitHub's notebook viewer blocks such data URIs and shows a broken image
+        instead (it shows inline SVG), text in an `<img>` cannot be selected or
+        searched, and page CSS cannot style it. `svg()` and `svgs()` always
+        return plain SVG.
     """
 
     def __init__(
