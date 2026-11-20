@@ -3,18 +3,26 @@
 from collections.abc import Callable, Iterable, Sequence
 from typing import Any
 
+from estnltk import Span
 from estnltk_core import RelationLayer
 from estnltk_core.layer.relation_layer import Relation
 from IPython.display import display_html
 
 from .extract import RowSpec
-from .relation_extract import EdgeSpec, RelationConfig, extract_relations, target_name
+from .relation_extract import (
+    AnnotationSpec,
+    EdgeSpec,
+    RelationConfig,
+    extract_relations,
+    target_name,
+)
 from .relation_model import relation_window
 from .relation_svg import render_relation_svg
 from .style import Style
 from .svg import html_blocks
 
 Relations = Relation | Iterable[Relation] | None
+Highlight = Relation | Span | Iterable[Relation | Span] | None
 
 
 class RelationArcVisualiser:
@@ -31,9 +39,10 @@ class RelationArcVisualiser:
     relations as directed links between its spans; the arc direction only comes
     from the `span_names` order (or `hub`/`edges`)::
 
-        vis = RelationArcVisualiser(label="rel_type")
+        vis = RelationArcVisualiser(label="rel_type", annotations=[("ner", "nertag")])
         vis(text["temporal_relations"])          # display in a notebook
         vis(layer, highlight=layer[0], window=2) # one relation, 2 words around
+        vis(layer, highlight=text.ner[0])        # emphasise a named entity
         svg = vis.svg(layer, relation=layer[0])
 
     Parameters
@@ -64,7 +73,16 @@ class RelationArcVisualiser:
         Layer with the attributes `id` and `head`, used by `attach="head"`.
     rows, ambiguous, missing
         Rows drawn under the words, as in `DependencyTreeVisualiser`; functions
-        get the word's span of `words_layer`.
+        get the word's span of `words_layer`. `ambiguous` applies only to rows.
+    annotations
+        Span layers drawn as tracks of boxes under the rows and span nodes, each
+        given as a layer name (unlabelled boxes) or `(layer, attribute)` (the
+        attribute's value inside each box, all distinct values of ambiguous
+        spans joined with `|`). A box covers the words its span overlaps;
+        overlapping spans of one layer are stacked. Use these for multi-word
+        layers such as `ner`, which give no values as `rows`. Unlike the
+        `overlay_layer` of `DependencyTreeVisualiser` (one layer, boxes behind
+        the words), the boxes are kept apart from the span boxes of relations.
     style
         Colours and sizes, see `Style`.
     render_svg_as_img
@@ -90,6 +108,7 @@ class RelationArcVisualiser:
         sentence_layer: str = "sentences",
         syntax_layer: str | None = None,
         rows: Sequence[RowSpec] = (),
+        annotations: Sequence[AnnotationSpec] = (),
         ambiguous: str = "first",
         missing: str = "-",
         style: Style | None = None,
@@ -112,6 +131,7 @@ class RelationArcVisualiser:
             sentence_layer=sentence_layer,
             syntax_layer=syntax_layer,
             rows=tuple(rows),
+            annotations=tuple(annotations),
             ambiguous=ambiguous,
             missing=missing,
         )
@@ -123,17 +143,20 @@ class RelationArcVisualiser:
         layer: RelationLayer,
         sentence: int | None = None,
         relation: Relations = None,
-        highlight: Relations = None,
+        highlight: Highlight = None,
         window: int | None = None,
     ) -> list[str]:
         """SVG strings of all sentence groups, or of those selected.
 
         `relation` (a Relation or several) draws only those relations.
         `sentence` keeps the group that contains that sentence. `highlight`
-        (Relations) emphasises relations and, without `sentence`, keeps only the
-        groups that contain them. `window` keeps only the spans of the
-        highlighted relations (or of all drawn ones) and `window` words on each
-        side; `window=0` draws just the spans.
+        takes Relations and spans of any layer of the Text (e.g. `text.ner[0]`,
+        a list of spans or a layer slice), also mixed. It emphasises the
+        relations, the words of the spans and the annotation boxes of the
+        spans, and without `sentence` keeps only the diagrams that contain
+        them. `window` keeps only the highlighted words (or the spans of all
+        drawn relations when nothing is highlighted) and `window` words on each
+        side; `window=0` draws just those words.
         """
         svgs = []
         for _, model in extract_relations(
@@ -149,7 +172,7 @@ class RelationArcVisualiser:
         layer: RelationLayer,
         sentence: int | None = None,
         relation: Relations = None,
-        highlight: Relations = None,
+        highlight: Highlight = None,
         window: int | None = None,
     ) -> str:
         """SVG string of one diagram (see `svgs` for the arguments).
@@ -169,7 +192,7 @@ class RelationArcVisualiser:
         layer: RelationLayer,
         sentence: int | None = None,
         relation: Relations = None,
-        highlight: Relations = None,
+        highlight: Highlight = None,
         window: int | None = None,
     ) -> str:
         """HTML with the diagrams (see `svgs` for the arguments).
@@ -187,7 +210,7 @@ class RelationArcVisualiser:
         layer: RelationLayer,
         sentence: int | None = None,
         relation: Relations = None,
-        highlight: Relations = None,
+        highlight: Highlight = None,
         window: int | None = None,
     ) -> None:
         """Display the diagrams in a notebook (see `svgs` for the arguments)."""

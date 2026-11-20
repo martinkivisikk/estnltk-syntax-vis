@@ -1,8 +1,9 @@
 """Extraction of relation models from EstNLTK `RelationLayer`s.
 
 Each relation becomes edges between span nodes. The words of the diagram are
-the spans of a word layer; a named span covers the words it overlaps.
-Sentences linked by the drawn relations form one diagram (a sentence group).
+the spans of a word layer; a named span covers the words it overlaps, and so do
+the spans of annotation layers drawn as tracks under the rows. Sentences linked
+by the drawn relations form one diagram (a sentence group).
 """
 
 from bisect import bisect_right
@@ -10,15 +11,19 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any
 
-from estnltk import Text
+from estnltk import Span, Text
 from estnltk_core import RelationLayer
 from estnltk_core.layer.relation_layer import Relation
 
-from .extract import RowSpec, _layer, _row
-from .relation_model import Edge, RelationModel, SpanNode
+from .extract import RowSpec, _layer, _row, _value
+from .relation_model import Annotation, Edge, RelationModel, SpanNode, Track
 
 EdgeSpec = tuple[str, str, str | None]
 """An edge given by span names: `(source, target, label)`; label `None` = default."""
+
+
+AnnotationSpec = str | tuple[str, str]
+"""An annotation track: `layer` (unlabelled boxes) or `(layer, label attribute)`."""
 
 
 def target_name(relation: Relation, source: str, target: str) -> str:
@@ -38,6 +43,7 @@ class RelationConfig:
     sentence_layer: str = "sentences"
     syntax_layer: str | None = None
     rows: tuple[RowSpec, ...] = ()
+    annotations: tuple[AnnotationSpec, ...] = ()
     ambiguous: str = "first"  # for rows
     missing: str = "-"
 
@@ -72,7 +78,32 @@ def _check_layer(layer: RelationLayer, config: RelationConfig) -> Text:
         raise ValueError(f"attach must be 'centre' or 'head', got {config.attach!r}")
     if config.attach == "head" and config.syntax_layer is None:
         raise ValueError("attach='head' needs a syntax_layer")
+    for spec in config.annotations:
+        _annotation_spec(layer.text_object, spec)
     return layer.text_object
+
+
+def _annotation_spec(text: Text, spec: AnnotationSpec) -> tuple[str, str | None]:
+    """`(layer name, label attribute or None)` of a checked annotation spec."""
+    if isinstance(spec, str):
+        name, attribute = spec, None
+    elif (
+        isinstance(spec, tuple)
+        and len(spec) == 2
+        and all(isinstance(x, str) for x in spec)
+    ):
+        name, attribute = spec
+    else:
+        raise ValueError(
+            f"an annotation must be a layer name or (layer, attribute), got {spec!r}"
+        )
+    layer = _layer(text, name, "Annotation")
+    if attribute is not None and attribute not in layer.attributes:
+        raise ValueError(
+            f"annotation layer {name!r} has no attribute {attribute!r} "
+            f"(attributes: {', '.join(layer.attributes) or 'none'})"
+        )
+    return name, attribute
 
 
 def _hub(relation: Relation, named: dict, layer: RelationLayer, config: RelationConfig):
@@ -166,21 +197,26 @@ class _Words:
                 heads.append(by_id.get((self.sentence[i], info[i][1])))
         return heads
 
-    def covered(self, named_span) -> tuple[int, int]:
-        """Word range `(first, last + 1)` of the words a named span overlaps."""
+    def overlapped(self, span) -> list[int]:
+        """Indices of the words a span (or named span) overlaps, in order."""
         hits = []
-        for start, end in named_span.base_span.flatten():
+        for start, end in span.base_span.flatten():
             k = max(bisect_right(self.starts, start) - 1, 0)
             while k < len(self.spans) and self.spans[k].start < end:
                 if start < self.spans[k].end:
                     hits.append(k)
                 k += 1
+        return sorted(set(hits))
+
+    def covered(self, named_span) -> tuple[int, int]:
+        """Word range `(first, last + 1)` of the words a named span overlaps."""
+        hits = self.overlapped(named_span)
         if not hits:
             raise ValueError(
                 f"span {named_span.name!r} ({named_span.text!r}) covers no word of "
                 f"the word layer"
             )
-        return min(hits), max(hits) + 1
+        return hits[0], hits[-1] + 1
 
     def head_of(self, start: int, end: int) -> int:
         """First word of `start .. end - 1` whose syntactic head is outside it."""
@@ -192,17 +228,44 @@ class _Words:
         return start
 
 
+def _items(selection) -> list:
+    """A Relation or span as a one-item list; other values as a list."""
+    if isinstance(selection, (Relation, Span)):  # spans iterate over their parts
+        return [selection]
+    return list(selection)
+
+
 def _relations(layer: RelationLayer, selection, what: str) -> list[Relation]:
     """Relations of `layer` given as a Relation or an iterable of them."""
-    items = [selection] if isinstance(selection, Relation) else list(selection)
+    items = _items(selection)
     for item in items:
         if not isinstance(item, Relation):
             raise ValueError(f"{what} must be a Relation or Relations, got {item!r}")
-        if not any(item is r for r in layer.relations):
-            raise ValueError(
-                f"{what} contains a relation that is not in {layer.name!r}"
-            )
+        _check_relation(layer, item, what)
     return items
+
+
+def _check_relation(layer: RelationLayer, item: Relation, what: str) -> None:
+    if not any(item is r for r in layer.relations):
+        raise ValueError(f"{what} contains a relation that is not in {layer.name!r}")
+
+
+def _highlight(layer: RelationLayer, text: Text, selection) -> tuple[list, list]:
+    """Split a highlight into `(relations, spans)` and check both."""
+    relations, spans = [], []
+    for item in _items(selection):
+        if isinstance(item, Relation):
+            _check_relation(layer, item, "highlight")
+            relations.append(item)
+        elif isinstance(item, Span):
+            if item.text_object is not text:
+                raise ValueError(
+                    f"highlight span {item.text!r} is not from the layer's Text"
+                )
+            spans.append(item)
+        else:
+            raise ValueError(f"highlight must be Relations or spans, got {item!r}")
+    return relations, spans
 
 
 def _groups(sentence_sets: list[set[int]]) -> list[set[int]]:
@@ -241,10 +304,22 @@ def extract_relations(
         if relation is None
         else _relations(layer, relation, "relation")
     )
-    marked = [] if highlight is None else _relations(layer, highlight, "highlight")
+    marked, marked_spans = (
+        ([], []) if highlight is None else _highlight(layer, text, highlight)
+    )
     for item in marked:
         if not any(item is r for r in drawn):
             raise ValueError("highlight contains a relation that is not drawn")
+    # Words of highlighted spans, and the sentences they are in
+    marked_words: set[int] = set()
+    for span in marked_spans:
+        hits = words.overlapped(span)
+        if not hits:
+            raise ValueError(
+                f"highlight span {span.text!r} covers no word of the word layer"
+            )
+        marked_words.update(hits)
+    span_sentences = {words.sentence[i] for i in marked_words}
 
     # Relations as edges between word ranges, with their sentences
     parsed = []  # (relation, {name: (start, end)}, [(source, target, label)], hub)
@@ -269,14 +344,20 @@ def extract_relations(
             )
         sentence %= n_sentences
         groups = [g for g in groups if sentence in g] or [{sentence}]
-    elif marked:
-        marked_sentences = {
+        if not span_sentences <= groups[0]:
+            raise ValueError(
+                f"the highlighted spans are not in the diagram of sentence {sentence}"
+            )
+    elif marked or marked_spans:
+        marked_sentences = span_sentences | {
             s
             for (rel, _, _, _), sentences in zip(parsed, sentence_sets, strict=True)
             if any(rel is m for m in marked)
             for s in sentences
         }
-        groups = [g for g in groups if g & marked_sentences]
+        kept = [g for g in groups if g & marked_sentences]
+        alone = marked_sentences - set().union(*kept)
+        groups = sorted(kept + [{s} for s in alone], key=min)
 
     models = []
     for group in groups:
@@ -285,14 +366,43 @@ def extract_relations(
             for p, sentences in zip(parsed, sentence_sets, strict=True)
             if sentences <= group
         ]
-        models.append(
-            (tuple(sorted(group)), _model(text, words, group, members, marked, config))
-        )
+        model = _model(text, words, group, members, marked, marked_spans, config)
+        models.append((tuple(sorted(group)), model))
     return models
 
 
+def _tracks(
+    text: Text, words: _Words, lo: int, hi: int, marked_spans, config
+) -> tuple[Track, ...]:
+    """Annotation tracks over the words `lo .. hi - 1` (indices relative to `lo`)."""
+    marked = {
+        (span.layer.name, span.base_span)
+        for span in marked_spans
+        if span.layer is not None
+    }
+    tracks = []
+    for spec in config.annotations:
+        name, attribute = _annotation_spec(text, spec)
+        annotations = []
+        for span in text[name]:
+            hits = [i for i in words.overlapped(span) if lo <= i < hi]
+            if not hits:
+                continue
+            label = "" if attribute is None else _value(span, attribute, config, "all")
+            annotations.append(
+                Annotation(
+                    hits[0] - lo,
+                    hits[-1] + 1 - lo,
+                    label,
+                    (name, span.base_span) in marked,
+                )
+            )
+        tracks.append(Track(name, tuple(annotations)))
+    return tuple(tracks)
+
+
 def _model(
-    text, words: _Words, group: set[int], members, marked, config
+    text, words: _Words, group: set[int], members, marked, marked_spans, config
 ) -> RelationModel:
     in_group = [i for i, s in enumerate(words.sentence) if s in group]
     lo, hi = in_group[0], in_group[-1] + 1
@@ -348,5 +458,12 @@ def _model(
             for (s, t, label), highlight in edges.items()
         ),
         rows=tuple(_row(text, spec, span_words, config) for spec in config.rows),
+        tracks=_tracks(text, words, lo, hi, marked_spans, config),
+        highlight=frozenset(
+            i - lo
+            for span in marked_spans
+            for i in words.overlapped(span)
+            if lo <= i < hi
+        ),
         visible=None if len(visible) == hi - lo else visible,
     )

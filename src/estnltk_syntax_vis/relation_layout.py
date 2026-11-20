@@ -9,7 +9,15 @@ anchor word. Overlapping nodes are put into separate lanes.
 import math
 from dataclasses import dataclass
 
-from .layout import Column, _label_x, arc_levels, column_slots, leg_offsets, text_width
+from .layout import (
+    Column,
+    _label_x,
+    arc_levels,
+    box_lanes,
+    column_slots,
+    leg_offsets,
+    text_width,
+)
 from .relation_model import RelationModel
 from .style import Style
 
@@ -37,6 +45,16 @@ class RelationArc:
 
 
 @dataclass(frozen=True)
+class TrackBox:
+    """Placed annotation box of a track."""
+
+    annotation: int  # index into `Track.annotations`
+    left: float
+    right: float
+    lane: int  # 0 = top lane of the track
+
+
+@dataclass(frozen=True)
 class RelationLayout:
     columns: tuple[Column, ...]
     column_of: dict[int, Column]  # visible word -> its column
@@ -45,6 +63,8 @@ class RelationLayout:
     max_level: int
     n_lanes: int
     width: float
+    # Per track of the model: its visible boxes and its number of lanes
+    tracks: tuple[tuple[tuple[TrackBox, ...], int], ...] = ()
 
 
 def node_lanes(spans: dict[int, tuple[int, int]]) -> dict[int, int]:
@@ -133,6 +153,21 @@ def relation_layout(model: RelationModel, style: Style) -> RelationLayout:
             need = text_width(label, style.row_font_size) + style.word_padding
             widen(first, last, need + 2 * inset(k))
 
+    # Annotation boxes of the tracks: visible column ranges, lanes, labels
+    track_ranges = []
+    for track in model.tracks:
+        ranges = []
+        for annotation in track.annotations:
+            cols = [pos[i] for i in range(annotation.start, annotation.end) if i in pos]
+            ranges.append((cols[0], cols[-1]) if cols else None)
+        track_ranges.append(ranges)
+        for annotation, r in zip(track.annotations, ranges, strict=True):
+            if r is not None and annotation.label:
+                need = text_width(
+                    annotation.label, style.row_font_size, annotation.highlight
+                )
+                widen(r[0], r[1], need + style.word_padding)
+
     # Extra space between columns `p` and `p + 1`, so edge labels fit on bars
     gaps = [0.0] * max(n - 1, 0)
 
@@ -205,6 +240,15 @@ def relation_layout(model: RelationModel, style: Style) -> RelationLayout:
                 x_label=_label_x(*legs[j], crossing, label_need(j)),
             )
         )
+    tracks = []
+    for ranges in track_ranges:
+        lanes_of = box_lanes(ranges)
+        placed = tuple(
+            TrackBox(a, xs[r[0]] + 2, xs[r[1]] + widths[r[1]] - 2, lane)
+            for a, (r, lane) in enumerate(zip(ranges, lanes_of, strict=True))
+            if r is not None and lane is not None
+        )
+        tracks.append((placed, max((b.lane for b in placed), default=-1) + 1))
     width = columns[-1].x + columns[-1].width if columns else 0.0
     return RelationLayout(
         columns=columns,
@@ -214,4 +258,5 @@ def relation_layout(model: RelationModel, style: Style) -> RelationLayout:
         max_level=max(levels, default=0),
         n_lanes=max(lanes.values(), default=-1) + 1,
         width=width,
+        tracks=tuple(tracks),
     )

@@ -72,4 +72,8 @@ RelationArcVisualiser()(text.coreference)              # mention → entity
 RelationArcVisualiser(label="rel_type")(text.temporal_relations)
 vis = RelationArcVisualiser(hub="verb", hub_label="sense_id", span_names=True)
 vis(layer, highlight=layer[0], window=0)               # one relation, its spans only
+
+# Span layers as tracks of boxes under the words; highlight takes spans too
+vis = RelationArcVisualiser(annotations=[("ner", "nertag")])
+vis(layer, highlight=text.ner[0])
 ```

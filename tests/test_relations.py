@@ -8,7 +8,7 @@ import xml.etree.ElementTree as ET
 
 import pytest
 from estnltk import Text
-from helpers import add_relations, make_text
+from helpers import add_relations, find, make_text
 
 import estnltk_syntax_vis.relation_arc_visualiser as relation_arc_visualiser_module
 from estnltk_syntax_vis import RelationArcVisualiser
@@ -316,6 +316,112 @@ def test_selection_errors(temporal, coref):
         extract_relations(temporal, config, sentence=5)
 
 
+# Annotation tracks and span highlights
+
+
+@pytest.fixture(scope="module")
+def ner(roles):
+    """Hand-made ambiguous `ner` layer over the words of the `roles` Text."""
+    from estnltk import Layer
+
+    text = roles.text_object
+    layer = Layer(
+        "ner",
+        attributes=("nertag",),
+        text_object=text,
+        enveloping="words",
+        ambiguous=True,
+    )
+    for part, nth, tags in [
+        ("President Bush", 0, ["PER"]),
+        ("Bush", 0, ["PER"]),
+        ("Valges Majas", 0, ["LOC", "ORG"]),
+        ("John", 0, ["PER"]),
+        ("Mari", 1, ["PER"]),
+    ]:
+        start, end = find(text.text, part, nth)
+        words = [w for w in text.words if start <= w.start and w.end <= end]
+        for tag in tags:
+            layer.add_annotation(words, nertag=tag)
+    text.add_layer(layer)
+    return layer
+
+
+def boxes(model, track=0):
+    """Annotations of a track as (text, label, highlight)."""
+    return [
+        (" ".join(model.words[a.start : a.end]), a.label, a.highlight)
+        for a in model.tracks[track].annotations
+    ]
+
+
+def test_annotation_tracks(roles, ner):
+    config = RelationConfig(annotations=(("ner", "nertag"), "ner"))
+    models = extract_relations(roles, config)
+    first = models[0][1]
+    assert [t.label for t in first.tracks] == ["ner", "ner"]
+    assert boxes(first) == [
+        ("President Bush", "PER", False),
+        ("Bush", "PER", False),
+        ("Valges Majas", "LOC|ORG", False),  # ambiguous: all values
+    ]
+    assert {a.label for a in first.tracks[1].annotations} == {""}
+    # Each diagram has only the spans of its own words
+    assert boxes(models[1][1]) == [("John", "PER", False)]
+    assert boxes(models[2][1]) == [("Mari", "PER", False)]
+
+
+def test_highlight_spans(roles, ner):
+    config = RelationConfig(annotations=(("ner", "nertag"),))
+    # A span selects its diagram and highlights its words and its box
+    ((sentences, model),) = extract_relations(roles, config, highlight=ner[2])
+    assert sentences == (0,)
+    assert boxes(model)[2] == ("Valges Majas", "LOC|ORG", True)
+    assert [model.words[i] for i in sorted(model.highlight)] == ["Valges", "Majas"]
+    assert not any(e.highlight for e in model.edges)
+    # A span of another layer at the same words marks words, not boxes
+    words = roles.text_object.words
+    ((_, model),) = extract_relations(roles, config, highlight=words[0:2])
+    assert [model.words[i] for i in sorted(model.highlight)] == [
+        "President",
+        "Bush",
+    ]
+    assert not any(h for _, _, h in boxes(model))
+    # Spans and relations mixed, over two diagrams
+    models = extract_relations(roles, config, highlight=[ner[3], roles[2]])
+    assert [s for s, _ in models] == [(1,), (2,)]
+    assert boxes(models[0][1]) == [("John", "PER", True)]
+    assert all(e.highlight for e in models[1][1].edges)
+    # A span in a sentence without relations gets a diagram of its own
+    plain = Text("Mari tuli. Jüri läks.").tag_layer(["words", "sentences"])
+    layer = add_relations(plain, "r", ["a", "b"], [{"a": "Mari", "b": "tuli"}])
+    models = extract_relations(layer, RelationConfig(), highlight=plain.words[3])
+    assert [s for s, _ in models] == [(1,)]
+
+
+def test_highlight_span_errors(roles, ner, coref):
+    config = RelationConfig()
+    with pytest.raises(ValueError, match="not from the layer's Text"):
+        extract_relations(roles, config, highlight=coref.text_object.words[0])
+    with pytest.raises(ValueError, match="not in the diagram of sentence 1"):
+        extract_relations(roles, config, sentence=1, highlight=ner[0])
+    with pytest.raises(ValueError, match="Relations or spans"):
+        extract_relations(roles, config, highlight=[1])
+
+
+@pytest.mark.parametrize(
+    "annotations, message",
+    [
+        (("nope",), "Annotation layer 'nope' is missing"),
+        ((("ner", "nope"),), "'ner' has no attribute 'nope'"),
+        ((("ner",),), "an annotation must be"),
+    ],
+)
+def test_annotation_errors(roles, ner, annotations, message):
+    with pytest.raises(ValueError, match=message):
+        extract_relations(roles, RelationConfig(annotations=annotations))
+
+
 # Visualiser
 
 
@@ -376,3 +482,14 @@ def test_visualiser_call_displays(monkeypatch, temporal):
 def test_visualiser_errors(kwargs, message):
     with pytest.raises(ValueError, match=message):
         RelationArcVisualiser(**kwargs)
+
+
+def test_visualiser_annotations_and_span_highlight(roles, ner):
+    vis = RelationArcVisualiser(annotations=[("ner", "nertag")])
+    svg = vis.svg(roles, highlight=ner[2], window=0)
+    root = ET.fromstring(svg)
+    words = [e.text for e in root.iter() if e.get("class") == "word"]
+    assert words == ["Valges", "Majas"]
+    hl = [e for e in root.iter() if e.get("class") == "annotation highlight"]
+    assert len(hl) == 1
+    assert [e.text for e in root.iter() if e.get("class") == "track-label"] == ["ner"]

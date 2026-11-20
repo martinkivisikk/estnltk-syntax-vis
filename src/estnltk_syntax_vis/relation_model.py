@@ -4,7 +4,7 @@ The model does not depend on EstNLTK: `relation_extract.py` builds it from a
 `RelationLayer`, tests and other callers can build it directly.
 """
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 
 from .model import Row
 
@@ -35,9 +35,29 @@ class Edge:
 
 
 @dataclass(frozen=True)
-class RelationModel:
-    """Words, span nodes, edges and rows of one relation diagram.
+class Annotation:
+    """A span of an annotation layer over the words `start .. end - 1`."""
 
+    start: int
+    end: int
+    label: str = ""
+    highlight: bool = False
+
+
+@dataclass(frozen=True)
+class Track:
+    """An annotation layer drawn as boxes under the rows; `label` names it."""
+
+    label: str
+    annotations: tuple[Annotation, ...]
+
+
+@dataclass(frozen=True)
+class RelationModel:
+    """Words, span nodes, edges, rows and annotation tracks of one diagram.
+
+    `highlight` holds word indices to emphasise besides the words of
+    highlighted nodes (e.g. the words of a highlighted annotation span).
     `visible` limits the drawing to some words (`None` = all); hidden stretches
     are drawn as "…" and edges to nodes without visible words are left out.
     """
@@ -46,6 +66,8 @@ class RelationModel:
     nodes: tuple[SpanNode, ...]
     edges: tuple[Edge, ...]
     rows: tuple[Row, ...] = ()
+    tracks: tuple[Track, ...] = ()
+    highlight: frozenset[int] = field(default_factory=frozenset)
     visible: frozenset[int] | None = None
 
     def __post_init__(self) -> None:
@@ -66,6 +88,15 @@ class RelationModel:
                 raise ValueError(
                     f"row {row.label!r} has {len(row.values)} values for {n} words"
                 )
+        for track in self.tracks:
+            for annotation in track.annotations:
+                if not 0 <= annotation.start < annotation.end <= n:
+                    raise ValueError(
+                        f"annotation {annotation} of track {track.label!r} is "
+                        f"outside the words"
+                    )
+        if any(not 0 <= i < n for i in self.highlight):
+            raise ValueError("highlight contains word indices outside the words")
         if self.visible is not None:
             if not self.visible:
                 raise ValueError("visible must contain at least one word")
@@ -81,8 +112,8 @@ class RelationModel:
 
     @property
     def highlight_words(self) -> frozenset[int]:
-        """Words of the highlighted nodes."""
-        return frozenset(
+        """Words of the highlighted nodes and the `highlight` words."""
+        return self.highlight | frozenset(
             i
             for node in self.nodes
             if node.highlight
@@ -91,23 +122,21 @@ class RelationModel:
 
 
 def relation_window(model: RelationModel, size: int) -> RelationModel:
-    """Show only the nodes' words and `size` words on each side of them.
+    """Show only the focus words and `size` words on each side of them.
 
-    The nodes are the highlighted ones, or all nodes when none is highlighted.
-    Words that are already hidden stay hidden. Without nodes the model is
-    returned unchanged.
+    The focus is the highlighted words (of nodes and `highlight`), or the words
+    of all nodes when nothing is highlighted. Words that are already hidden stay
+    hidden. Without a focus the model is returned unchanged.
     """
     if size < 0:
         raise ValueError(f"window size must be >= 0, got {size}")
-    focus = [node for node in model.nodes if node.highlight] or list(model.nodes)
+    focus = model.highlight_words or {
+        i for node in model.nodes for i in range(node.start, node.end)
+    }
     if not focus:
         return model
     n = len(model.words)
-    keep = {
-        j
-        for node in focus
-        for j in range(max(node.start - size, 0), min(node.end + size, n))
-    }
+    keep = {j for i in focus for j in range(max(i - size, 0), min(i + size + 1, n))}
     if model.visible is not None:
         keep &= model.visible
     if not keep:

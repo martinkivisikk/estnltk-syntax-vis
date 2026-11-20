@@ -5,13 +5,16 @@ import xml.etree.ElementTree as ET
 import pytest
 
 from estnltk_syntax_vis import (
+    Annotation,
     Edge,
     RelationModel,
     Row,
     SpanNode,
+    Track,
     relation_window,
     render_relation_svg,
 )
+from estnltk_syntax_vis.layout import text_width
 from estnltk_syntax_vis.relation_layout import node_lanes, relation_layout
 from estnltk_syntax_vis.style import Style
 
@@ -178,3 +181,67 @@ def test_svg_without_nodes():
     root = ET.fromstring(render_relation_svg(RelationModel(("a", "b"), (), ())))
     assert len(classes(root, "word")) == 2
     assert not classes(root, "arc")
+
+
+# Annotation tracks
+
+
+def test_model_validates_tracks_and_highlight():
+    bad = Track("ner", (Annotation(0, 9, "PER"),))
+    with pytest.raises(ValueError, match="annotation .* of track 'ner'"):
+        RelationModel(WORDS, (), (), tracks=(bad,))
+    with pytest.raises(ValueError, match="highlight"):
+        RelationModel(WORDS, (), (), highlight=frozenset({8}))
+
+
+def test_window_around_highlighted_words():
+    model = roles(highlight=frozenset({6}))
+    assert model.highlight_words == {6}
+    assert relation_window(model, 1).visible == {5, 6, 7}
+
+
+def test_layout_track_lanes_and_widths():
+    long = "a very long annotation label"
+    track = Track(
+        "ner",
+        (
+            Annotation(0, 2, "PER"),
+            Annotation(1, 2, "PER"),  # overlaps the first: second lane
+            Annotation(4, 6, long),
+            Annotation(7, 8),
+        ),
+    )
+    model = roles(tracks=(track,), visible=frozenset(range(7)))
+    s = Style()
+    lay = relation_layout(model, s)
+    ((boxes, n_lanes),) = lay.tracks
+    by_annotation = {b.annotation: b for b in boxes}
+    assert set(by_annotation) == {0, 1, 2}  # the hidden "." is left out
+    assert by_annotation[1].lane == 0 and by_annotation[0].lane == 1
+    assert n_lanes == 2
+    wide = by_annotation[2]
+    assert wide.right - wide.left >= text_width(long, s.row_font_size)
+
+
+def test_svg_tracks():
+    tracks = (
+        Track("ner", (Annotation(0, 2, "PER"), Annotation(4, 6, "LOC", True))),
+        Track("empty", ()),
+        Track("clauses", (Annotation(0, 8),)),
+    )
+    root = ET.fromstring(render_relation_svg(roles(tracks=tracks)))
+    boxes = classes(root, "annotation")
+    assert [b.get("data-track") for b in boxes] == ["ner", "ner", "clauses"]
+    assert [b.get("class") for b in boxes][1] == "annotation highlight"
+    labels = classes(root, "annotation-label")
+    assert [e.text for e in labels] == ["PER", "LOC"]
+    assert labels[1].get("font-weight") == "bold"
+    # Empty tracks get no label
+    assert [e.text for e in classes(root, "track-label")] == ["ner", "clauses"]
+    # Tracks are under the node boxes, the second under the first
+    node_bottom = max(
+        float(e.get("y")) + float(e.get("height")) for e in classes(root, "node")
+    )
+    ys = [float(b.get("y")) for b in boxes]
+    assert node_bottom < ys[0] == ys[1] < ys[2]
+    assert ys[2] + float(boxes[2].get("height")) < float(root.get("height"))

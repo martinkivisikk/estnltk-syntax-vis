@@ -15,8 +15,15 @@ def render_relation_svg(model: RelationModel, style: Style | None = None) -> str
     lay = relation_layout(model, s)
     bold = model.highlight_words
 
+    # Tracks with visible boxes, as (track, its boxes, number of lanes)
+    tracks = [
+        (track, boxes, n)
+        for track, (boxes, n) in zip(model.tracks, lay.tracks, strict=True)
+        if boxes
+    ]
+    side_labels = [r.label for r in model.rows] + [t.label for t, _, _ in tracks]
     row_label_w = max(
-        (text_width(r.label, s.row_font_size) for r in model.rows if r.label),
+        (text_width(label, s.row_font_size) for label in side_labels if label),
         default=0.0,
     )
     x0 = s.margin + (row_label_w + 12 if row_label_w else 0)
@@ -41,7 +48,15 @@ def render_relation_svg(model: RelationModel, style: Style | None = None) -> str
             return y_node_label(lane) + 5
         return y_text + 5 + (n_lanes - 1 - lane) * s.lane_inset
 
-    y_bottom = y_node_bottom(0)
+    # Annotation tracks under the span nodes, one lane per line of boxes
+    box_h = s.row_height + 4
+    lane_step = box_h + 3
+    y_tracks = []
+    y = y_node_bottom(0) + 6
+    for _, _, n in tracks:
+        y_tracks.append(y)
+        y += n * lane_step
+    y_bottom = y - 3 if tracks else y_node_bottom(0)
     width = x0 + lay.width + s.margin
     height = y_bottom + s.margin
 
@@ -77,6 +92,34 @@ def render_relation_svg(model: RelationModel, style: Style | None = None) -> str
                 f'font-size="{_f(s.row_font_size)}" fill="{s.text}">'
                 f"{escape(node.label)}</text>"
             )
+
+    # Annotation boxes with their labels inside
+    for (track, boxes, _), y_track in zip(tracks, y_tracks, strict=True):
+        for box in boxes:
+            annotation = track.annotations[box.annotation]
+            top = y_track + box.lane * lane_step
+            if annotation.highlight:
+                css, weight = "annotation highlight", ' font-weight="bold"'
+                fill = f'fill="{s.highlight_fill}"'
+                stroke = s.highlight_arc
+            else:
+                css, weight = "annotation", ""
+                fill = f'fill="{s.box_tint}" fill-opacity="{_f(s.box_tint_opacity)}"'
+                stroke = s.box_stroke
+            out.append(
+                f'<rect class="{css}" data-track="{escape(track.label)}" '
+                f'x="{_f(box.left)}" y="{_f(top)}" width="{_f(box.right - box.left)}" '
+                f'height="{_f(box_h)}" rx="4" {fill} stroke="{stroke}" '
+                f'stroke-width="1"/>'
+            )
+            if annotation.label:
+                out.append(
+                    f'<text class="annotation-label" '
+                    f'x="{_f((box.left + box.right) / 2)}" '
+                    f'y="{_f(top + box_h / 2 + 0.35 * s.row_font_size)}" '
+                    f'text-anchor="middle" font-size="{_f(s.row_font_size)}" '
+                    f'fill="{s.text}"{weight}>{escape(annotation.label)}</text>'
+                )
 
     # Arcs; highlighted ones last so that they are drawn on top
     labels = []
@@ -150,6 +193,13 @@ def render_relation_svg(model: RelationModel, style: Style | None = None) -> str
             f'<text class="row-label" x="{_f(s.margin + row_label_w)}" y="{_f(y)}" '
             f'text-anchor="end" font-size="{_f(s.row_font_size)}" '
             f'font-style="italic" fill="{s.muted}">{escape(row.label)}</text>'
+        )
+    for (track, _, _), y in zip(tracks, y_tracks, strict=True):
+        out.append(
+            f'<text class="track-label" x="{_f(s.margin + row_label_w)}" '
+            f'y="{_f(y + box_h / 2 + 0.35 * s.row_font_size)}" text-anchor="end" '
+            f'font-size="{_f(s.row_font_size)}" font-style="italic" '
+            f'fill="{s.muted}">{escape(track.label)}</text>'
         )
     out.append("</svg>")
     return "\n".join(out)
