@@ -11,10 +11,11 @@ uv sync          # package and dev tools (pytest, ruff, JupyterLab)
 uv run pytest    # tests
 ```
 
-## Demo notebook
+## Notebooks
 
 ```bash
-uv run jupyter lab notebooks/demo.ipynb
+uv run jupyter lab notebooks/tutorial.ipynb   # short tour of all features
+uv run jupyter lab notebooks/demo.ipynb       # dependency trees in more detail
 ```
 
 The notebook parses Estonian text with EstNLTK's MaltParser (`maltparser_syntax`), which
